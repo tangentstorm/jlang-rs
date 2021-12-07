@@ -10,7 +10,10 @@ use std::os::raw::c_char;
 
 use dlopen::wrapper::{WrapperApi, Container};
 
-const JDL: &str = "j.dll";  // TODO: "libj.dylib"; "libj.so"
+#[cfg(target_os="windows")]
+const JDL: &str = "j.dll";
+#[cfg(target_os="linux")]
+const JDL: &str = "./libj.so";
 
 /// j string. (c string)
 pub type JS = *const c_char;
