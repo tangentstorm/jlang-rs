@@ -32,10 +32,10 @@ macro_rules! jprint { ($s:expr) => {
 
 
 pub type JI = i64;
-pub struct JT(usize); // pointer to the interpreter
+pub type JT = usize; // pointer to the interpreter
 
 /// j array type (unused so far)
-pub struct JA<'a> { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:JI, v:&'a JI }
+#[repr(C)] pub struct JA { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:JI, v:*const JI }
 
 pub struct SMTYPE(usize);
 pub const SMWIN:SMTYPE = SMTYPE(0);  // j.exe    Jwdw (Windows) front end
@@ -44,11 +44,12 @@ pub const SMCON:SMTYPE = SMTYPE(3);  // jconsole
 
 
 /// callbacks for the j session manager
+#[repr(C)]
 pub struct JCBs {
     /// write a string to the display
     pub wr: extern "C" fn(jt:&JT, len:u32, s:JS),
     /// window driver
-    pub wd: extern "C" fn(jt:&JT, x:u32, &JA, &&JA)->i32,
+    pub wd: extern "C" fn(jt:&JT, x:u32, *const JA, *const *const JA)->i32,
     /// read a string from input
     pub rd: extern "C" fn(jt:&JT, prompt:JS)->JS,
     /// reserved?
@@ -63,7 +64,7 @@ pub struct JCBs {
   print!("wr:"); jprintln!(s); }
 
 /// default wd(): window driver. (this implementation does nothing)
-#[no_mangle] pub extern "C" fn wd(_jt:&JT, x:u32, a:&JA, z:&&JA)->i32 { 0 }
+#[no_mangle] pub extern "C" fn wd(_jt:&JT, _x:u32, _a:*const JA, _z:*const *const JA)->i32 { 0 }
 
 /// default rd(): runs i.3 3 TODO: read from stdin
 #[no_mangle] pub extern "C" fn rd<'a>(_jt:&JT, prompt:JS)->JS {
