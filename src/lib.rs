@@ -5,25 +5,30 @@
 
 #[macro_use] extern crate dlopen_derive;
 extern crate dlopen;
-// extern crate libc;
-// use std::{ffi::{CStr, CString}, os::raw::c_char};
-// use std::ptr;
+use std::ffi::CStr;
+use std::os::raw::c_char;
 
 use dlopen::wrapper::{WrapperApi, Container};
 
 const JDL: &str = "j.dll";  // TODO: "libj.dylib"; "libj.so"
 
 /// j string. (c string)
-pub type JS = *const u8; // libc::c_char;
-// macro_rules! jstr { ($x:expr) => { CString::new($x).unwrap().as_ptr() as JS } }
-// macro_rules! jstr { ($x:expr) => { std::ptr::addr_of!($x) as JS } }
-macro_rules! jstr { ($x:expr) => { $x.as_ptr() } }
-macro_rules! jprint { ($s:expr)=> {{
-  let mut p = $s;
-  while unsafe { *p } != b'\0' {
-      print!( "{}", unsafe { *p } as char);
-      unsafe { p = p.add(1) } }}}}
+pub type JS = *const c_char;
+macro_rules! jstr { ($x:expr) => { CStr::from_bytes_with_nul($x).unwrap().as_ptr() } }
 macro_rules! jprintln { ($s:expr) => { { jprint!($s); println!(); }}}
+macro_rules! jprint { ($s:expr) => {
+    let cs = unsafe { CStr::from_ptr($s) };
+    print!("{}", cs.to_str().unwrap()) }}
+
+
+// -- other variants i've tried --
+// macro_rules! jstr { ($x:expr) => { std::ptr::addr_of!($x) as JS } }
+// macro_rules! jstr { ($x:expr) => { $x.as_ptr() } }
+// macro_rules! jprint { ($s:expr)=> {{
+//   let mut p = $s;
+//   while unsafe { *p } != 0 {
+//       print!( "{}", unsafe { *p as u8 } as char);
+//       unsafe { p = p.add(1) } }}}}
 
 
 pub type JI = i64;
@@ -41,11 +46,11 @@ pub const SMCON:SMTYPE = SMTYPE(3);  // jconsole
 /// callbacks for the j session manager
 pub struct JCBs {
     /// write a string to the display
-    pub wr: fn(jt:&JT, len:u32, s:&JS),
+    pub wr: extern "C" fn(jt:&JT, len:u32, s:JS),
     /// window driver
-    pub wd: fn(jt:&JT, x:u32, &JA, &&JA)->i32,
+    pub wd: extern "C" fn(jt:&JT, x:u32, &JA, &&JA)->i32,
     /// read a string from input
-    pub rd: fn(jt:&JT, prompt:JS)->JS,
+    pub rd: extern "C" fn(jt:&JT, prompt:JS)->JS,
     /// reserved?
     _x: usize,
     /// session type code
@@ -53,21 +58,24 @@ pub struct JCBs {
 }
 
 /// default write().. prints to stdout
-pub fn wr(_jt:&JT, len:u32, s:&JS) {
+#[no_mangle] pub extern "C" fn wr(_jt:&JT, len:u32, s:JS) {
   println!("GOT HERE. len: {}", len);
-  println!("{:?}", unsafe{ *s }); }
+  print!("wr:"); jprintln!(s); }
 
-/// default wd(): does nothing
-pub fn wd(_jt:&JT, x:u32, a:&JA, z:&&JA)->i32 { 0 }
+/// default wd(): window driver. (this implementation does nothing)
+#[no_mangle] pub extern "C" fn wd(_jt:&JT, x:u32, a:&JA, z:&&JA)->i32 { 0 }
 
 /// default rd(): runs i.3 3 TODO: read from stdin
-pub fn rd<'a>(_jt:&JT, _prompt:JS)->JS { jstr!(b"i.3 3\0") }
+#[no_mangle] pub extern "C" fn rd<'a>(_jt:&JT, prompt:JS)->JS {
+    jprint!(prompt);
+    // TODO: actually read in some text
+    jstr!(b"i.3 3\0") }
 
 #[derive(WrapperApi)]
 pub struct JAPI {
   #[dlopen_name="JInit"] init: extern "C" fn()->JT,
   #[dlopen_name="JFree"] free: extern "C" fn(jt:JT),
-  #[dlopen_name="JDo"]   jdo: extern "C" fn(jt:&JT, s:&JS)->JI,
+  #[dlopen_name="JDo"]   jdo: extern "C" fn(jt:&JT, s:JS)->JI,
   #[dlopen_name="JSM"]   jsm: extern "C" fn(jt:&JT, jcbs:JCBs),
 //   #[dlopen_name="JGetA"] geta: extern "C" fn(jt:&JT, ji:JI, name:JS)->JA<'a>,
 //   #[dlopen_name="JGetM"] getm: extern "C" fn(jt:&JT),
@@ -91,7 +99,7 @@ pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
   print!("input: "); jprintln!(s);
   println!("calling jdo()...");
   // --- crash occurs here: ----
-  c.jdo(&jt, &s);
+  c.jdo(&jt, s);
   println!("calling free()...");
   c.free(jt);
   println!("all done."); }
