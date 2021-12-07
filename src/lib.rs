@@ -34,43 +34,50 @@ macro_rules! jprint { ($s:expr) => {
 //       unsafe { p = p.add(1) } }}}}
 
 
+type VOIDP = *const u8;
 pub type JI = i64;
-pub type JT = usize; // pointer to the interpreter
+pub type JT = *const u8; // pointer to the interpreter
 
 /// j array type (unused so far)
 #[repr(C)] pub struct JA { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:JI, v:*const JI }
 
-pub struct SMTYPE(usize);
+#[repr(C)] pub struct SMTYPE(usize);
 pub const SMWIN:SMTYPE = SMTYPE(0);  // j.exe    Jwdw (Windows) front end
 pub const SMJAVA:SMTYPE = SMTYPE(2); // j.jar    Jwdp (Java) front end
 pub const SMCON:SMTYPE = SMTYPE(3);  // jconsole
 
 
 /// callbacks for the j session manager
+type JWrFn = extern "C" fn(jt:JT, len:u32, s:JS);
+type JWdFn = extern "C" fn(jt:JT, x:u32, *const JA, *const *const JA)->i32;
+type JRdFn = extern "C" fn(jt:JT, prompt:JS)->JS;
+
+
+
 #[repr(C)]
 pub struct JCBs {
     /// write a string to the display
-    pub wr: extern "C" fn(jt:&JT, len:u32, s:JS),
+    pub wr: JWrFn,
     /// window driver
-    pub wd: extern "C" fn(jt:&JT, x:u32, *const JA, *const *const JA)->i32,
+    pub wd: JWdFn,
     /// read a string from input
-    pub rd: extern "C" fn(jt:&JT, prompt:JS)->JS,
+    pub rd: JRdFn,
     /// reserved?
-    _x: usize,
+    _x: VOIDP,
     /// session type code
     pub sm: SMTYPE
 }
 
 /// default write().. prints to stdout
-#[no_mangle] pub extern "C" fn wr(_jt:&JT, len:u32, s:JS) {
+#[no_mangle] pub extern "C" fn wr(_jt:JT, len:u32, s:JS) {
   println!("GOT HERE. len: {}", len);
   print!("wr:"); jprintln!(s); }
 
 /// default wd(): window driver. (this implementation does nothing)
-#[no_mangle] pub extern "C" fn wd(_jt:&JT, _x:u32, _a:*const JA, _z:*const *const JA)->i32 { 0 }
+#[no_mangle] pub extern "C" fn wd(_jt:JT, _x:u32, _a:*const JA, _z:*const *const JA)->i32 { 0 }
 
 /// default rd(): runs i.3 3 TODO: read from stdin
-#[no_mangle] pub extern "C" fn rd<'a>(_jt:&JT, prompt:JS)->JS {
+#[no_mangle] pub extern "C" fn rd<'a>(_jt:JT, prompt:JS)->JS {
     jprint!(prompt);
     // TODO: actually read in some text
     jstr!(b"i.3 3\0") }
@@ -79,11 +86,13 @@ pub struct JCBs {
 pub struct JAPI {
   #[dlopen_name="JInit"] init: extern "C" fn()->JT,
   #[dlopen_name="JFree"] free: extern "C" fn(jt:JT),
-  #[dlopen_name="JDo"]   jdo: extern "C" fn(jt:&JT, s:JS)->JI,
-  #[dlopen_name="JSM"]   jsm: extern "C" fn(jt:&JT, jcbs:JCBs),
-//   #[dlopen_name="JGetA"] geta: extern "C" fn(jt:&JT, ji:JI, name:JS)->JA<'a>,
-//   #[dlopen_name="JGetM"] getm: extern "C" fn(jt:&JT),
-//   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:&JT),
+  #[dlopen_name="JDo"]   jdo: extern "C" fn(jt:JT, s:JS)->JI,
+  #[dlopen_name="JSM"]   jsm: extern "C" fn(jt:JT, jcbs:JCBs),
+  #[dlopen_name="JSMX"]  jsmx: extern "C"
+  fn(jt:JT, wr:JWrFn, wd:JWdFn, rd:JRdFn, _x:VOIDP, sm:SMTYPE)
+//   #[dlopen_name="JGetA"] geta: extern "C" fn(jt:JT, ji:JI, name:JS)->JA<'a>,
+//   #[dlopen_name="JGetM"] getm: extern "C" fn(jt:JT),
+//   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT),
 }
 
 pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
@@ -95,15 +104,16 @@ pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
   println!("calling init()...");
   let jt = c.init();
   println!("calling jsm()...");
-  c.jsm(&jt, JCBs{wr, wd, rd, _x:0, sm:SMCON });
+  c.jsm(jt, JCBs{wr, wd, rd, _x:std::ptr::null(), sm:SMCON });
+  // c.jsmx(jt, wr, wd, rd, std::ptr::null(), SMCON);
   println!("building string for jdo()...");
   let prompt = jstr!(b"j> \0");
   print!("prompt: "); jprintln!(prompt);
-  let s = rd(&jt, prompt);
+  let s = rd(jt, prompt);
   print!("input: "); jprintln!(s);
   println!("calling jdo()...");
   // --- crash occurs here: ----
-  c.jdo(&jt, s);
+  c.jdo(jt, s);
   println!("calling free()...");
   c.free(jt);
   println!("all done."); }
