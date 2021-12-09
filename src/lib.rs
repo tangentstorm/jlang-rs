@@ -2,6 +2,7 @@
 //
 // https://code.jsoftware.com/wiki/Interfaces/JFEX
 // https://github.com/jsoftware/jsource/blob/master/jsrc/jlib.h
+// https://code.jsoftware.com/wiki/Guides/DLLs/Calling_the_J_DLL
 
 #[macro_use] extern crate dlopen_derive;
 extern crate dlopen;
@@ -20,53 +21,50 @@ pub type JS = *const c_char;
 macro_rules! jstr { ($x:expr) => { CStr::from_bytes_with_nul($x).unwrap().as_ptr() } }
 macro_rules! jprintln { ($s:expr) => { { jprint!($s); println!(); }}}
 macro_rules! jprint { ($s:expr) => {
-    let cs = unsafe { CStr::from_ptr($s) };
-    print!("{}", cs.to_str().unwrap()) }}
+  let cs = unsafe { CStr::from_ptr($s) };
+  print!("{}", cs.to_str().unwrap()) }}
+macro_rules! jfmt { ($s:expr) => {{
+  let cs = unsafe { CStr::from_ptr($s) };
+  format!("{}", cs.to_str().unwrap()) }}}
 
-
-// -- other variants i've tried --
-// macro_rules! jstr { ($x:expr) => { std::ptr::addr_of!($x) as JS } }
-// macro_rules! jstr { ($x:expr) => { $x.as_ptr() } }
-// macro_rules! jprint { ($s:expr)=> {{
-//   let mut p = $s;
-//   while unsafe { *p } != 0 {
-//       print!( "{}", unsafe { *p as u8 } as char);
-//       unsafe { p = p.add(1) } }}}}
-
-
+/// arbitrary untyped pointer (void* in c)
 type VOIDP = *const u8;
+/// J integer type (TODO: support 32-bit as well?)
 pub type JI = i64;
-pub type JT = *const u8; // pointer to the interpreter
+/// opaque pointer to J interpreter.
+#[repr(C)] #[derive(Clone,Copy)] pub struct JT(*const u8);
 
 /// j array type (unused so far)
 #[repr(C)] pub struct JA { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:JI, v:*const JI }
 
+/// code indicating the type of session. sent to jsm()
 #[repr(C)] pub struct SMTYPE(usize);
-pub const SMWIN:SMTYPE = SMTYPE(0);  // j.exe    Jwdw (Windows) front end
-pub const SMJAVA:SMTYPE = SMTYPE(2); // j.jar    Jwdp (Java) front end
-pub const SMCON:SMTYPE = SMTYPE(3);  // jconsole
+/// SMTYPE = windows (jqt? any gui platform with wd?)
+pub const SMWIN:SMTYPE = SMTYPE(0);
+/// SMTYPE = java frontend (not sure what this is.)
+pub const SMJAVA:SMTYPE = SMTYPE(2);
+/// SMTYPE = jconsole
+pub const SMCON:SMTYPE = SMTYPE(3);
 
-
-/// callbacks for the j session manager
+/// jsm callback for writing a string to the display.
 type JWrFn = extern "C" fn(jt:JT, len:u32, s:JS);
+/// jsm callback for the window driver.
 type JWdFn = extern "C" fn(jt:JT, x:u32, *const JA, *const *const JA)->i32;
+/// jsm callback for reading a string from the user.
 type JRdFn = extern "C" fn(jt:JT, prompt:JS)->JS;
 
-
-
-#[repr(C)]
-pub struct JCBs {
-    /// write a string to the display
-    pub wr: JWrFn,
-    /// window driver
-    pub wd: JWdFn,
-    /// read a string from input
-    pub rd: JRdFn,
-    /// reserved?
-    _x: VOIDP,
-    /// session type code
-    pub sm: SMTYPE
-}
+/// callbacks for j session manager (to create an interactive ui)
+#[repr(C)] pub struct JCBs {
+  /// write a string to the display
+  pub wr: JWrFn,
+  /// window driver
+  pub wd: JWdFn,
+  /// read a string from input
+  pub rd: JRdFn,
+  /// reserved?
+  _x: VOIDP,
+  /// session type code
+  pub sm: SMTYPE }
 
 /// default write().. prints to stdout
 #[no_mangle] pub extern "C" fn wr(_jt:JT, len:u32, s:JS) {
@@ -78,42 +76,46 @@ pub struct JCBs {
 
 /// default rd(): runs i.3 3 TODO: read from stdin
 #[no_mangle] pub extern "C" fn rd<'a>(_jt:JT, prompt:JS)->JS {
-    jprint!(prompt);
-    // TODO: actually read in some text
-    jstr!(b"i.3 3\0") }
+  jprint!(prompt); // TODO: actually read in some text
+  jstr!(b"i.3 3\0") }
 
 #[derive(WrapperApi)]
 pub struct JAPI {
+  /// initialize the j interpreter
   #[dlopen_name="JInit"] init: extern "C" fn()->JT,
+
+  /// free the j interpreter
   #[dlopen_name="JFree"] free: extern "C" fn(jt:JT),
+
+  /// execute a j sentence
   #[dlopen_name="JDo"]   jdo: extern "C" fn(jt:JT, s:JS)->JI,
+
+  /// get the 'captured' response (output)
+  /// Use this to get the response from J if you do not set up
+  /// i/o callbacks using jsm().
+  #[dlopen_name="JGetR"] getr: extern "C" fn(jt:JT)->JS,
+
+  /// Initialize J Session Manager
   #[dlopen_name="JSM"]   jsm: extern "C" fn(jt:JT, jcbs:JCBs),
-  #[dlopen_name="JSMX"]  jsmx: extern "C"
-  fn(jt:JT, wr:JWrFn, wd:JWdFn, rd:JRdFn, _x:VOIDP, sm:SMTYPE)
-//   #[dlopen_name="JGetA"] geta: extern "C" fn(jt:JT, ji:JI, name:JS)->JA<'a>,
-//   #[dlopen_name="JGetM"] getm: extern "C" fn(jt:JT),
-//   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT),
-}
+  // #[dlopen_name="JSMX"]  jsmx: extern "C"
+  // fn(jt:JT, wr:JWrFn, wd:JWdFn, rd:JRdFn, _x:VOIDP, sm:SMTYPE)
+  /// fetch byte representation: (3!:1) name
+  #[dlopen_name="JGetA"] geta: extern "C" fn(jt:JT, ji:JI, nm:JS)->JA,
+
+  /// get named noun as (type, rank, shape, data)
+  #[dlopen_name="JGetM"] getm: extern "C" fn(jt:JT, nm:JS, t:&mut JI, r:&mut JI, sh:&mut VOIDP, d:&mut VOIDP),
+
+  /// set named noun as (type, rank, shape, data)
+  #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT, nm:JS, t:&mut JI, r:&mut JI, sh:&mut VOIDP, d:&mut VOIDP) }
 
 pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
 
 /// run with `cargo test --lib -- --nocapture`
 #[test]fn test_demo() {
-  println!("loading dll...");
   let c = load();
-  println!("calling init()...");
   let jt = c.init();
-  println!("calling jsm()...");
-  c.jsm(jt, JCBs{wr, wd, rd, _x:std::ptr::null(), sm:SMCON });
-  // c.jsmx(jt, wr, wd, rd, std::ptr::null(), SMCON);
-  println!("building string for jdo()...");
-  let prompt = jstr!(b"j> \0");
-  print!("prompt: "); jprintln!(prompt);
-  let s = rd(jt, prompt);
-  print!("input: "); jprintln!(s);
-  println!("calling jdo()...");
-  // --- crash occurs here: ----
+  let s = jstr!(b"i. 3 3\0");
   c.jdo(jt, s);
-  println!("calling free()...");
-  c.free(jt);
-  println!("all done."); }
+  let r = c.getr(jt);
+  assert_eq!("0 1 2\n3 4 5\n6 7 8\n", jfmt!(r));
+  c.free(jt); }
