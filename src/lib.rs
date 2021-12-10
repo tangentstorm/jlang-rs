@@ -18,15 +18,12 @@ const JDL: &str = "j.dll";
 const JDL: &str = "./libj.so";
 
 /// j string. (c string)
-pub type JS = *const c_char;
-macro_rules! jstr { ($x:expr) => { CStr::from_bytes_with_nul($x).unwrap().as_ptr() } }
-macro_rules! jprintln { ($s:expr) => { { jprint!($s); println!(); }}}
-macro_rules! jprint { ($s:expr) => {
-  let cs = unsafe { CStr::from_ptr($s) };
-  print!("{}", cs.to_str().unwrap()) }}
-macro_rules! jfmt { ($s:expr) => {{
-  let cs = unsafe { CStr::from_ptr($s) };
-  format!("{}", cs.to_str().unwrap()) }}}
+#[repr(C)] pub struct JS{p:*const c_char}
+impl JS {
+  pub fn from_ptr(p:*const c_char)->JS { JS { p }}
+  pub fn to_cstr(&self)->&CStr { unsafe { CStr::from_ptr(self.p) }}
+  pub fn to_str(&self)->&str { self.to_cstr().to_str().unwrap() }}
+macro_rules! jstr { ($x:expr) => { JS{p:CStr::from_bytes_with_nul($x).unwrap().as_ptr() }} }
 
 /// arbitrary untyped pointer (void* in c)
 type VOIDP = *const u8;
@@ -72,15 +69,14 @@ type JRdFn = extern "C" fn(jt:JT, prompt:JS)->JS;
 
 /// default write().. prints to stdout
 #[no_mangle] pub extern "C" fn wr(_jt:JT, len:u32, s:JS) {
-  println!("GOT HERE. len: {}", len);
-  print!("wr:"); jprintln!(s); }
+  print!("wr(len:{}, s:{})", len, s.to_str()); }
 
 /// default wd(): window driver. (this implementation does nothing)
 #[no_mangle] pub extern "C" fn wd(_jt:JT, _x:u32, _a:*const JA, _z:*const *const JA)->i32 { 0 }
 
 /// default rd(): runs i.3 3 TODO: read from stdin
 #[no_mangle] pub extern "C" fn rd<'a>(_jt:JT, prompt:JS)->JS {
-  jprint!(prompt); // TODO: actually read in some text
+  print!("{}", prompt.to_str()); // TODO: actually read in some text
   jstr!(b"i.3 3\0") }
 
 #[derive(WrapperApi)]
@@ -113,7 +109,9 @@ pub struct JAPI {
   /// set named noun as (type, rank, shape, data)
   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT, nm:JS, t:&mut JI, r:&mut JI, sh:&mut PJI, d:&mut VOIDP) }
 
-pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
+
+pub type JContainer = Container<JAPI>;
+pub fn load()->JContainer { unsafe { Container::load(JDL).unwrap() }}
 
 /// run with `cargo test --lib`   # add `-- --nocapture` to see println!() calls
 #[test]fn test_demo() {
@@ -122,7 +120,7 @@ pub fn load<'a>()->Container<JAPI> { unsafe { Container::load(JDL).unwrap() }}
   let jt = c.init();
   c.jdo(jt, jstr!(b"m =. *: i. 2 3\0"));
   c.jdo(jt, jstr!(b"m\0"));
-  assert_eq!("0  1  4\n9 16 25\n", jfmt!(c.getr(jt)));
+  assert_eq!("0  1  4\n9 16 25\n", c.getr(jt).to_str());
 
   // now fetch the actual data.
   let mut t:JI=0; let mut r:JI=0; let mut sh:PJI=std::ptr::null_mut(); let mut d:VOIDP=std::ptr::null_mut();
