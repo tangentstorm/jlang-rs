@@ -124,7 +124,10 @@ pub struct JVal {
   pub shape: Vec<JI>,
   pub data: JData }
 
-pub struct JProc { pub c : Container<JAPI> }
+pub struct JProc {
+  pub c : Container<JAPI>,
+  pub jt : JT,
+  pub binpath: String }
 
 impl JProc {
 
@@ -140,16 +143,18 @@ impl JProc {
     else { panic!() }}
 
   pub fn load_from_path(p:&Path)->JProc {
-    JProc { c: unsafe { Container::load(p.as_os_str()).unwrap() }}}
+    let c = unsafe { Container::<JAPI>::load(p.as_os_str()).unwrap() };
+    let jt = c.init();
+    JProc { c, jt, binpath:p.parent().or(Some(Path::new("."))).unwrap().display().to_string() }}
 
   /// call c.getm internally and convert result to JVal
-  pub fn get_val(&self, jt:JT, name: &str)->JVal {
+  pub fn get_val(&self, name: &str)->JVal {
     let mut t:JI=0; let mut rank:JI=0;
     let mut sh:PJI=std::ptr::null_mut();
     let mut d:VOIDP=std::ptr::null_mut();
     let cs = std::ffi::CString::new(name).unwrap();
     let js = JS::from_ptr(cs.as_ptr());
-    self.c.getm(jt, js, &mut t, &mut rank, &mut sh, &mut d);
+    self.c.getm(self.jt, js, &mut t, &mut rank, &mut sh, &mut d);
 
     // -- copy shape
     let mut count = 1; // so we can multiply
@@ -171,15 +176,14 @@ impl JProc {
 #[test]fn test_demo() {
   // connect to j and run a simple command:
   let jp = JProc::load();
-  let jt = jp.c.init();
-  jp.c.jdo(jt, jstr!(b"m =. *: i. 2 3\0"));
-  jp.c.jdo(jt, jstr!(b"m\0"));
-  assert_eq!("0  1  4\n9 16 25\n", jp.c.getr(jt).to_str());
+  jp.c.jdo(jp.jt, jstr!(b"m =. *: i. 2 3\0"));
+  jp.c.jdo(jp.jt, jstr!(b"m\0"));
+  assert_eq!("0  1  4\n9 16 25\n", jp.c.getr(jp.jt).to_str());
 
   // now fetch the actual data.
-  let res = jp.get_val(jt, "m");
+  let res = jp.get_val("m");
   assert_eq!(res, JVal{ rank:2, shape:vec![2, 3],
     data:JData::IntV(vec![0, 1, 4, 9, 16, 25]) });
 
   // all done. kill the session:
-  jp.c.free(jt); }
+  jp.c.free(jp.jt); }
