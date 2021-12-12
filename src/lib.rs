@@ -36,8 +36,36 @@ pub type JI = i64;
 // pointer to j integer
 pub type PJI = *const JI;
 
-/// c-style j array type
-#[repr(C)] #[derive(Debug)] pub struct JA { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:PJI, v:PJI }
+/// c-style j array type. defined in jtype.h in the j source.
+#[repr(C)] #[derive(Debug)] pub struct JAD {
+  /// k: union field used when block is on free chain
+  k:JI,
+  /// f: flag bits for inplacing
+  f:JI,
+  /// m: "multi-use field"
+  m:JI,
+  /// t: type (or proxychain when on free chain)
+  t:JI,
+  /// c: usecount
+  c:JI,
+  /// n: number of atoms, or 1 for sparse array.
+  n:JI,
+  /// r: rank
+  r:JI,
+  /// s: shape
+  s:PJI,
+  /// v: first integer of the value
+  v:[JI;1] }
+
+pub type JA = *const JAD;
+
+/// rust-style representation of j array
+#[derive(PartialEq, Eq, Debug)]
+pub struct JBin {
+  rank: JI,
+  shape: Vec<usize>,
+  jtype: JI,
+  data: Vec<u8> }
 
 /// code indicating the type of session. sent to jsm()
 #[repr(C)] pub struct SMTYPE(usize);
@@ -101,7 +129,7 @@ pub struct JAPI {
   // #[dlopen_name="JSMX"]  jsmx: extern "C"
   // fn(jt:JT, wr:JWrFn, wd:JWdFn, rd:JRdFn, _x:VOIDP, sm:SMTYPE)
 
-  /// fetch byte representation: (3!:1) name. len seems to be the length of the name
+  /// fetch byte representation: (3!:1) of nm. len is the length of the string.
   #[dlopen_name="JGetA"] geta: extern "C" fn(jt:JT, len:JI, nm:JS)->JA,
 
   /// get named noun as (type, rank, shape, data)
@@ -113,8 +141,9 @@ pub struct JAPI {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum JData {
-  Lit(char),  LitV(Vec<char>),
-  Int(JI),    IntV(Vec<JI>),
+  Lit(u8),  LitV(Vec<u8>),
+  Int(JI),  IntV(Vec<JI>),
+  Boxed(Vec<JData>),
   Other }
 
 /// Rust representation of a J noun value.
@@ -151,7 +180,7 @@ impl JProc {
     jp }
 
   /// call c.getm internally and convert result to JVal
-  pub fn get_val(&self, name: &str)->JVal {
+  pub fn get_v(&self, name: &str)->JVal {
     let mut t:JI=0; let mut rank:JI=0;
     let mut sh:PJI=std::ptr::null_mut();
     let mut d:VOIDP=std::ptr::null_mut();
@@ -170,7 +199,9 @@ impl JProc {
 
     // -- copy data
     let mut data = JData::Other;
-    if shape.is_empty() { // scalar
+    if t == 32 { // boxed. always a vector so JData stays small
+      data = JData::Boxed(vec![]) }
+    else if shape.is_empty() { // scalar
       if t == 4 { data = JData::Int( unsafe { *(d as *const JI) })}}
     else { // vector
       if t == 4 {
@@ -179,6 +210,29 @@ impl JProc {
         data = JData::IntV(v); }}
     JVal { rank, shape, data } }
 
+  pub fn get_b(&self, name:&str)->JBin {
+    // !! str_to_jstr
+    let cs = std::ffi::CString::new(name).unwrap();
+    let js = JS::from_ptr(cs.as_ptr());
+    let ja = self.c.geta(self.jt, name.len() as JI, js);
+    let a = unsafe { &*ja };
+    assert_eq!(a.t, 2, "expected literal after jgeta.");
+    let mut p = std::ptr::addr_of!(a.v) as *const usize;
+    let _f = unsafe { *p }; // flag field
+    let t = unsafe { p=p.add(1); *p }; // jtype
+    let _c = unsafe { p=p.add(1); *p }; // count
+    let r = unsafe { p=p.add(1); *p }; // rank
+    // read the shape
+    let mut shape = vec![0usize; r];
+    for _ in 0..r { unsafe { p = p.add(1); shape.push(*p); } }
+    // read the bytes
+    unsafe { p = p.add(1); }
+    let mut b = p as *const u8;
+    let mut data = vec![unsafe { *b } ];
+    for _ in 0..(unsafe { (*ja).c }-1) { unsafe { b = b.add(1); data.push(*b); } }
+    // return compiled data
+    JBin { rank: r as JI, jtype: t as JI, shape, data }}
+
   /// run a command, returning the status code
   pub fn cmd(&self, s:&str)->JI {
     // !! str_to_jstr
@@ -186,10 +240,15 @@ impl JProc {
     let js = JS::from_ptr(cs.as_ptr());
     self.c.jdo(self.jt, js)}
 
+  /// run a command and return the binary representation (3!:1)
+  pub fn cmd_b(&self, s:&str)->JBin {
+    self.cmd(&("RESULT_jrs_ =: ".to_string() + &s.to_string()));
+    self.get_b("RESULT_jrs_") }
+
   /// run a cmd, return result as jval
   pub fn cmd_v(&self, s:&str)->JVal {
     self.cmd(&("RESULT_jrs_ =: ".to_string() + &s.to_string()));
-    self.get_val("RESULT_jrs_")}
+    self.get_v("RESULT_jrs_")}
 
   /// run a cmd, return result as String
   pub fn cmd_s(&self, s:&str)->String {
@@ -207,15 +266,19 @@ impl JProc {
   assert_eq!("0  1  4\n9 16 25", jp.cmd_s("m"));
 
   // now fetch the actual data.
-  let res = jp.get_val("m");
+  let res = jp.get_v("m");
   assert_eq!(res, JVal{ rank:2, shape:vec![2, 3],
     data:JData::IntV(vec![0, 1, 4, 9, 16, 25]) });
 
   // all done. kill the session:
   jp.c.free(jp.jt); }
 
-
 #[test] fn test_profile() {
   let jp = JProc::load();
   assert_eq!(jp.bin_path, jp.cmd_s("BINPATH_z_"));
   assert_eq!("&.>", jp.cmd_s("each")); }
+
+#[test] fn test_jget_b() {
+  let jp = JProc::load();
+  let b = jp.cmd_b("'a'");
+  assert_eq!(b, JBin { rank:0, shape:vec![], jtype:2, data:vec![97]})}
