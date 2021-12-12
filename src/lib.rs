@@ -1,4 +1,4 @@
-// an attempt to connect to j from rust.
+// tool for calling j from rust.
 //
 // https://code.jsoftware.com/wiki/Interfaces/JFEX
 // https://github.com/jsoftware/jsource/blob/master/jsrc/jlib.h
@@ -36,7 +36,7 @@ pub type JI = i64;
 // pointer to j integer
 pub type PJI = *const JI;
 
-/// j array type
+/// c-style j array type
 #[repr(C)] #[derive(Debug)] pub struct JA { k:JI, flag:JI, m:JI, t:JI, c:JI, n:JI, r:JI, s:PJI, v:PJI }
 
 /// code indicating the type of session. sent to jsm()
@@ -110,42 +110,76 @@ pub struct JAPI {
   /// set named noun as (type, rank, shape, data)
   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT, nm:JS, t:&mut JI, r:&mut JI, sh:&mut PJI, d:&mut VOIDP) }
 
-pub type JContainer = Container<JAPI>;
 
-pub fn load()->JContainer {
-  use std::{env, path::PathBuf};
-  let jh : Result<String,env::VarError> =
-    env::var("J_HOME").or_else(|_| Ok(".".to_string()));
-  if let Ok(jh) = jh {
-    let mut p = PathBuf::from(&jh); p.push(JDL);
-    if p.exists() { load_from_path(&p) }
-    else { panic!("!! NO J LIBRARY FOUND (at {:?})\n\
-      !! Try setting J_HOME environment variable to directory of {}", p, JDL); }}
-  else { panic!() }}
+#[derive(PartialEq, Eq, Debug)]
+pub enum JData {
+  Lit(char),  LitV(Vec<char>),
+  Int(JI),    IntV(Vec<JI>),
+  Other }
 
-pub fn load_from_path(p:&Path)->JContainer {
-  unsafe { Container::load(p.as_os_str()).unwrap() }}
+/// Rust representation of a J noun value.
+#[derive(PartialEq, Eq, Debug)]
+pub struct JVal {
+  pub rank: JI,
+  pub shape: Vec<JI>,
+  pub data: JData }
+
+pub struct JProc { pub c : Container<JAPI> }
+
+impl JProc {
+
+  pub fn load()->JProc {
+    use std::{env, path::PathBuf};
+    let jh : Result<String,env::VarError> =
+      env::var("J_HOME").or_else(|_| Ok(".".to_string()));
+    if let Ok(jh) = jh {
+      let mut p = PathBuf::from(&jh); p.push(JDL);
+      if p.exists() { Self::load_from_path(&p) }
+      else { panic!("!! NO J LIBRARY FOUND (at {:?})\n\
+        !! Try setting J_HOME environment variable to directory of {}", p, JDL); }}
+    else { panic!() }}
+
+  pub fn load_from_path(p:&Path)->JProc {
+    JProc { c: unsafe { Container::load(p.as_os_str()).unwrap() }}}
+
+  /// call c.getm internally and convert result to JVal
+  pub fn get_val(&self, jt:JT, name: &str)->JVal {
+    let mut t:JI=0; let mut rank:JI=0;
+    let mut sh:PJI=std::ptr::null_mut();
+    let mut d:VOIDP=std::ptr::null_mut();
+    let cs = std::ffi::CString::new(name).unwrap();
+    let js = JS::from_ptr(cs.as_ptr());
+    self.c.getm(jt, js, &mut t, &mut rank, &mut sh, &mut d);
+
+    // -- copy shape
+    let mut count = 1; // so we can multiply
+    let mut shape:Vec<JI> = vec![];
+    for _ in 0..rank { unsafe { count *= *sh; shape.push(*sh); sh = sh.add(1); }}
+
+    // -- copy data
+    let mut data = JData::Other;
+    if shape.is_empty() { // scalar
+      if t == 4 { data = JData::Int( unsafe { *(d as *const JI) })}}
+    else { // vector
+      if t == 4 {
+        let mut v:Vec<JI> = vec![]; let mut p = d as *const JI;
+        unsafe { for _ in 0..count { v.push(*p); p = p.add(1); }}
+        data = JData::IntV(v); }}
+    JVal { rank, shape, data } }}
 
 /// run with `cargo test --lib`   # add `-- --nocapture` to see println!() calls
 #[test]fn test_demo() {
   // connect to j and run a simple command:
-  let c = load();
-  let jt = c.init();
-  c.jdo(jt, jstr!(b"m =. *: i. 2 3\0"));
-  c.jdo(jt, jstr!(b"m\0"));
-  assert_eq!("0  1  4\n9 16 25\n", c.getr(jt).to_str());
+  let jp = JProc::load();
+  let jt = jp.c.init();
+  jp.c.jdo(jt, jstr!(b"m =. *: i. 2 3\0"));
+  jp.c.jdo(jt, jstr!(b"m\0"));
+  assert_eq!("0  1  4\n9 16 25\n", jp.c.getr(jt).to_str());
 
   // now fetch the actual data.
-  let mut t:JI=0; let mut r:JI=0; let mut sh:PJI=std::ptr::null_mut(); let mut d:VOIDP=std::ptr::null_mut();
-  c.getm(jt, jstr!(b"m\0"), &mut t, &mut r, &mut sh, &mut d);
-  const JDT_INT:JI = 4; assert_eq!(JDT_INT, t);
-  assert_eq!(2, r); // answer is a rank 2 array
-  let rows = unsafe { *sh }; assert_eq!(rows, 2, "expect 2 rows");
-  let cols = unsafe { sh = sh.add(1); *sh }; assert_eq!(cols, 3, "expect 3 cols");
-  let mut res : Vec<JI> = vec![];
-  let mut d = d as *const JI; // since t told us it's an array of J ints.
-  unsafe { for _ in 0..(rows*cols) { res.push(*d); d = d.add(1); }}
-  assert_eq!(res, [0, 1, 4, 9, 16, 25]);
+  let res = jp.get_val(jt, "m");
+  assert_eq!(res, JVal{ rank:2, shape:vec![2, 3],
+    data:JData::IntV(vec![0, 1, 4, 9, 16, 25]) });
 
   // all done. kill the session:
-  c.free(jt); }
+  jp.c.free(jt); }
