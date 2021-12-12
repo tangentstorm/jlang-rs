@@ -9,6 +9,7 @@
 extern crate dlopen;
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::path::Path;
 
 use dlopen::wrapper::{WrapperApi, Container};
 
@@ -109,9 +110,21 @@ pub struct JAPI {
   /// set named noun as (type, rank, shape, data)
   #[dlopen_name="JSetM"] setm: extern "C" fn(jt:JT, nm:JS, t:&mut JI, r:&mut JI, sh:&mut PJI, d:&mut VOIDP) }
 
-
 pub type JContainer = Container<JAPI>;
-pub fn load()->JContainer { unsafe { Container::load(JDL).unwrap() }}
+
+pub fn load()->JContainer {
+  use std::{env, path::PathBuf};
+  let jh : Result<String,env::VarError> =
+    env::var("J_HOME").or_else(|_| Ok(".".to_string()));
+  if let Ok(jh) = jh {
+    let mut p = PathBuf::from(&jh); p.push(JDL);
+    if p.exists() { load_from_path(&p) }
+    else { panic!("!! NO J LIBRARY FOUND (at {:?})\n\
+      !! Try setting J_HOME environment variable to directory of {}", p, JDL); }}
+  else { panic!() }}
+
+pub fn load_from_path(p:&Path)->JContainer {
+  unsafe { Container::load(p.as_os_str()).unwrap() }}
 
 /// run with `cargo test --lib`   # add `-- --nocapture` to see println!() calls
 #[test]fn test_demo() {
