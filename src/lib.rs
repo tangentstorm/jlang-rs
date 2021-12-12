@@ -127,7 +127,7 @@ pub struct JVal {
 pub struct JProc {
   pub c : Container<JAPI>,
   pub jt : JT,
-  pub binpath: String }
+  pub bin_path: String }
 
 impl JProc {
 
@@ -145,7 +145,9 @@ impl JProc {
   pub fn load_from_path(p:&Path)->JProc {
     let c = unsafe { Container::<JAPI>::load(p.as_os_str()).unwrap() };
     let jt = c.init();
-    JProc { c, jt, binpath:p.parent().or(Some(Path::new("."))).unwrap().display().to_string() }}
+    let jp = JProc { c, jt, bin_path:p.parent().or(Some(Path::new("."))).unwrap().display().to_string() };
+    jp.cmd(&("BINPATH_z_ =: '".to_string() + &jp.bin_path + &"'".to_string()));
+    jp }
 
   /// call c.getm internally and convert result to JVal
   pub fn get_val(&self, name: &str)->JVal {
@@ -192,14 +194,16 @@ impl JProc {
   pub fn cmd_s(&self, s:&str)->String {
     self.cmd(&s);
     let js = self.c.getr(self.jt);
-    js.to_str().to_string() }}
+    let mut c = js.to_str().chars();
+    c.next_back(); // strip final newline
+    c.as_str().to_string() }}
 
 /// run with `cargo test --lib`   # add `-- --nocapture` to see println!() calls
-#[test]fn test_demo() {
+#[test] fn test_demo() {
   // connect to j and run a simple command:
   let jp = JProc::load();
   jp.cmd("m =. *: i. 2 3");
-  assert_eq!("0  1  4\n9 16 25\n", jp.cmd_s("m"));
+  assert_eq!("0  1  4\n9 16 25", jp.cmd_s("m"));
 
   // now fetch the actual data.
   let res = jp.get_val("m");
@@ -208,3 +212,9 @@ impl JProc {
 
   // all done. kill the session:
   jp.c.free(jp.jt); }
+
+
+#[test] fn test_profile() {
+  let jp = JProc::load();
+  assert_eq!(jp.bin_path, jp.cmd_s("BINPATH_z_"));
+}
