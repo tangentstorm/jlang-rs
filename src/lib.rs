@@ -217,5 +217,5 @@ impl JProc {
 
 #[test] fn test_profile() {
   let jp = JProc::load();
-  assert_eq!("&.>", jp.cmd_s("each")); }
   assert_eq!(jp.bin_path, jp.cmd_s("BINPATH_z_"));
+  assert_eq!("&.>", jp.cmd_s("each")); }
