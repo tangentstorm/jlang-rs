@@ -152,8 +152,12 @@ impl JProc {
     let mut t:JI=0; let mut rank:JI=0;
     let mut sh:PJI=std::ptr::null_mut();
     let mut d:VOIDP=std::ptr::null_mut();
+
+    // !! str_to_jstr: how to extract macro/function? dropping the cs frees the memory,
+    //    so if you just extract these 2 lines directly, you get an empty string.
     let cs = std::ffi::CString::new(name).unwrap();
     let js = JS::from_ptr(cs.as_ptr());
+
     self.c.getm(self.jt, js, &mut t, &mut rank, &mut sh, &mut d);
 
     // -- copy shape
@@ -170,15 +174,32 @@ impl JProc {
         let mut v:Vec<JI> = vec![]; let mut p = d as *const JI;
         unsafe { for _ in 0..count { v.push(*p); p = p.add(1); }}
         data = JData::IntV(v); }}
-    JVal { rank, shape, data } }}
+    JVal { rank, shape, data } }
+
+  /// run a command, returning the status code
+  pub fn cmd(&self, s:&str)->JI {
+    // !! str_to_jstr
+    let cs = std::ffi::CString::new(s).unwrap();
+    let js = JS::from_ptr(cs.as_ptr());
+    self.c.jdo(self.jt, js)}
+
+  /// run a cmd, return result as jval
+  pub fn cmd_v(&self, s:&str)->JVal {
+    self.cmd(&("RESULT_jrs_ =: ".to_string() + &s.to_string()));
+    self.get_val("RESULT_jrs_")}
+
+  /// run a cmd, return result as String
+  pub fn cmd_s(&self, s:&str)->String {
+    self.cmd(&s);
+    let js = self.c.getr(self.jt);
+    js.to_str().to_string() }}
 
 /// run with `cargo test --lib`   # add `-- --nocapture` to see println!() calls
 #[test]fn test_demo() {
   // connect to j and run a simple command:
   let jp = JProc::load();
-  jp.c.jdo(jp.jt, jstr!(b"m =. *: i. 2 3\0"));
-  jp.c.jdo(jp.jt, jstr!(b"m\0"));
-  assert_eq!("0  1  4\n9 16 25\n", jp.c.getr(jp.jt).to_str());
+  jp.cmd("m =. *: i. 2 3");
+  assert_eq!("0  1  4\n9 16 25\n", jp.cmd_s("m"));
 
   // now fetch the actual data.
   let res = jp.get_val("m");
