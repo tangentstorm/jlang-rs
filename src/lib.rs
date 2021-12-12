@@ -147,6 +147,7 @@ impl JProc {
     let jt = c.init();
     let jp = JProc { c, jt, bin_path:p.parent().or(Some(Path::new("."))).unwrap().display().to_string() };
     jp.cmd(&("BINPATH_z_ =: '".to_string() + &jp.bin_path + &"'".to_string()));
+    jp.cmd("0!:0<BINPATH_z_,'/profile.ijs'");
     jp }
 
   /// call c.getm internally and convert result to JVal
@@ -216,5 +217,5 @@ impl JProc {
 
 #[test] fn test_profile() {
   let jp = JProc::load();
+  assert_eq!("&.>", jp.cmd_s("each")); }
   assert_eq!(jp.bin_path, jp.cmd_s("BINPATH_z_"));
-}
